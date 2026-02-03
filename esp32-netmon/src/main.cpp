@@ -5,13 +5,13 @@
 #include <ESP32Ping.h>
 #include <PubSubClient.h>
 
-// ===== WIFI CONFIG =====
+// ===== WIFI =====
 const char* WIFI_SSID = "ChangeME";
 const char* WIFI_PASS = "ChangeME";
 
 // ===== MQTT CONFIG =====
-const char* MQTT_HOST = "192.168.33.13";
-const int   MQTT_PORT = 1883;
+const char* MQTT_HOST  = "192.168.33.13";
+const int   MQTT_PORT  = 1883;
 const char* MQTT_TOPIC = "netmon/esp32-1/metrics";
 
 WiFiClient wifiClient;
@@ -28,7 +28,7 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // ===== TARGETS =====
 IPAddress ROUTER_IP;                   // set from WiFi.gatewayIP()
-IPAddress LINUX_IP(192, 168, 33, 13);  // <-- CHANGE if needed
+IPAddress LINUX_IP(192, 168, 33, 13);  // change if needed
 
 // ===== DEVICE STATE =====
 enum DeviceState { STATE_OK, STATE_DEGRADED, STATE_DOWN, STATE_RECOVERING };
@@ -41,17 +41,34 @@ unsigned long wifiRecoveringUntilMs = 0;
 struct PingStats {
   int lastMs = -1;
   bool lastOk = false;
-  int consecFails = 0;
+  unsigned long lastOkMs = 0;   // when we last succeeded
 };
 
 PingStats routerStats;
 PingStats linuxStats;
 
 // ===== RTO tracking for Linux =====
-bool linuxWasUp = true;                 // previous "linux reachable" status
-unsigned long linuxDownSinceMs = 0;      // when linux first went down
-unsigned long showRtoUntilMs = 0;        // while this is active, show REC screen
-int lastRtoSeconds = -1;                // last computed RTO seconds
+bool linuxWasUp = true;
+unsigned long linuxDownSinceMs = 0;
+unsigned long showRtoUntilMs = 0;
+int lastRtoSeconds = -1;
+
+// ===== MQTT non-blocking reconnect =====
+unsigned long lastMqttAttemptMs = 0;
+const unsigned long MQTT_RETRY_MS = 3000;
+
+// ===== Scheduling =====
+const unsigned long SAMPLE_MS   = 2000; // ping/sample cadence
+const unsigned long LCD_MS      = 500;  // LCD refresh cadence
+const unsigned long WIFI_RETRY_MS = 3000;
+
+unsigned long lastSampleMs = 0;
+unsigned long lastLcdMs    = 0;
+unsigned long lastWifiRetryMs = 0;
+
+// ===== Last computed snapshot (what LCD shows) =====
+DeviceState lastState = STATE_RECOVERING;
+int lastRssi = 0;
 
 // ===== LED helpers =====
 void ledsOff() {
@@ -62,11 +79,11 @@ void ledsOff() {
 }
 
 void setLeds(DeviceState s) {
-  // NOTE: during RTO/REC screen we override LEDs, so this is "normal mode"
-  ledsOff();
-  if (s == STATE_OK) digitalWrite(LED_OK, HIGH);
-  else if (s == STATE_DEGRADED) digitalWrite(LED_DEG, HIGH);
-  else if (s == STATE_DOWN) digitalWrite(LED_DOWN, HIGH);
+  // Steady LEDs: OK / DEG / DOWN
+  digitalWrite(LED_OK,   (s == STATE_OK)       ? HIGH : LOW);
+  digitalWrite(LED_DEG,  (s == STATE_DEGRADED) ? HIGH : LOW);
+  digitalWrite(LED_DOWN, (s == STATE_DOWN)     ? HIGH : LOW);
+  // REC uses blinkRecovering()
 }
 
 void blinkRecovering() {
@@ -80,10 +97,10 @@ void blinkRecovering() {
 }
 
 void ledSelfTest() {
-  digitalWrite(LED_OK, HIGH);   delay(200); digitalWrite(LED_OK, LOW);
-  digitalWrite(LED_DEG, HIGH);  delay(200); digitalWrite(LED_DEG, LOW);
-  digitalWrite(LED_DOWN, HIGH); delay(200); digitalWrite(LED_DOWN, LOW);
-  digitalWrite(LED_REC, HIGH);  delay(200); digitalWrite(LED_REC, LOW);
+  digitalWrite(LED_OK, HIGH);   delay(150); digitalWrite(LED_OK, LOW);
+  digitalWrite(LED_DEG, HIGH);  delay(150); digitalWrite(LED_DEG, LOW);
+  digitalWrite(LED_DOWN, HIGH); delay(150); digitalWrite(LED_DOWN, LOW);
+  digitalWrite(LED_REC, HIGH);  delay(150); digitalWrite(LED_REC, LOW);
 }
 
 // ===== LCD helpers =====
@@ -119,7 +136,7 @@ void connectWifiBlocking() {
 
   Serial.print("Connecting to WiFi");
   while (!isWifiConnected()) {
-    delay(500);
+    delay(300);
     Serial.print(".");
   }
   Serial.println();
@@ -132,71 +149,39 @@ void connectWifiBlocking() {
   Serial.print("RSSI: "); Serial.print(WiFi.RSSI()); Serial.println(" dBm");
 }
 
-void connectMqtt() {
-  while (!mqtt.connected()) {
-    Serial.print("Connecting to MQTT...");
-    if (mqtt.connect("esp32-netmon-1")) {
-      Serial.println("connected");
-    } else {
-      Serial.print("failed, rc=");
-      Serial.println(mqtt.state());
-      delay(2000);
-    }
-  }
+// ===== MQTT non-blocking =====
+void mqttEnsureConnectedNonBlocking(unsigned long now) {
+  if (mqtt.connected()) return;
+  if (now - lastMqttAttemptMs < MQTT_RETRY_MS) return;
+
+  lastMqttAttemptMs = now;
+  Serial.print("MQTT reconnect attempt... ");
+  bool ok = mqtt.connect("esp32-netmon-1");
+  Serial.println(ok ? "OK" : "FAIL");
 }
 
-// ===== Ping =====
-void pingOnce(IPAddress ip, PingStats& st) {
+// ===== Ping (NOTE: Ping.ping can block up to timeout when host is down) =====
+void pingOnce(IPAddress ip, PingStats& st, unsigned long now) {
   bool ok = Ping.ping(ip, 1);
   int ms = ok ? (int)Ping.averageTime() : -1;
 
   st.lastOk = ok;
   st.lastMs = ms;
-
-  if (!ok) st.consecFails++;
-  else st.consecFails = 0;
-}
-
-// ===== State logic =====
-// Worst target decides state.
-DeviceState computeState() {
-  if (!isWifiConnected()) return STATE_DOWN;
-
-  // Router down => system down
-  if (routerStats.consecFails >= 3) return STATE_DOWN;
-
-  // Linux down => degraded (service unavailable)
-  if (linuxStats.consecFails >= 3) return STATE_DEGRADED;
-
-  // High latency => degraded
-  if ((routerStats.lastOk && routerStats.lastMs >= 80) ||
-      (linuxStats.lastOk && linuxStats.lastMs >= 80)) {
-    return STATE_DEGRADED;
-  }
-
-  // No data yet
-  if (routerStats.lastMs < 0 || linuxStats.lastMs < 0) return STATE_RECOVERING;
-
-  return STATE_OK;
+  if (ok) st.lastOkMs = now;
 }
 
 // ===== RTO logic =====
 void updateLinuxRto(unsigned long now) {
-  // Current linux reachable? (we use lastOk)
   bool linuxUpNow = linuxStats.lastOk;
 
-  // If it just went DOWN, mark the time (only once)
   if (linuxWasUp && !linuxUpNow) {
     linuxDownSinceMs = now;
     Serial.println("Linux DOWN start -> timer started");
   }
 
-  // If it just RECOVERED (was down, now up), compute RTO and show it
   if (!linuxWasUp && linuxUpNow) {
     unsigned long downTime = (linuxDownSinceMs > 0) ? (now - linuxDownSinceMs) : 0;
     lastRtoSeconds = (int)(downTime / 1000UL);
-
-    // show REC screen for 5 seconds
     showRtoUntilMs = now + 5000;
 
     Serial.print("Linux RECOVERED. RTO=");
@@ -207,9 +192,36 @@ void updateLinuxRto(unsigned long now) {
   linuxWasUp = linuxUpNow;
 }
 
+// ===== State logic (TIME-BASED, reacts fast and consistent) =====
+const unsigned long ROUTER_DOWN_MS = 4000; // if router hasn't succeeded in 4s -> DOWN
+const unsigned long LINUX_DOWN_MS  = 4000; // if linux hasn't succeeded in 4s  -> DEGRADED
+const int HIGH_LAT_MS = 80;
+
+DeviceState computeState(unsigned long now) {
+  if (!isWifiConnected()) return STATE_DOWN;
+
+  // Router is critical: if router is "stale" => DOWN
+  if (routerStats.lastOkMs == 0 || (now - routerStats.lastOkMs) > ROUTER_DOWN_MS) {
+    return STATE_DOWN;
+  }
+
+  // Linux is monitored service: if stale => DEGRADED (not full DOWN)
+  if (linuxStats.lastOkMs == 0 || (now - linuxStats.lastOkMs) > LINUX_DOWN_MS) {
+    return STATE_DEGRADED;
+  }
+
+  // Latency-based degrade
+  if ((routerStats.lastOk && routerStats.lastMs >= HIGH_LAT_MS) ||
+      (linuxStats.lastOk  && linuxStats.lastMs  >= HIGH_LAT_MS)) {
+    return STATE_DEGRADED;
+  }
+
+  return STATE_OK;
+}
+
 void setup() {
   Serial.begin(115200);
-  delay(300);
+  delay(200);
 
   pinMode(LED_OK, OUTPUT);
   pinMode(LED_DEG, OUTPUT);
@@ -220,6 +232,7 @@ void setup() {
   Wire.begin();
   lcd.init();
   lcd.backlight();
+
   lcdLine(0, "ESP32 NetMon");
   lcdLine(1, "Booting...");
 
@@ -227,107 +240,131 @@ void setup() {
   connectWifiBlocking();
 
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
-  connectMqtt();
 
   wasWifiConnected = true;
   wifiRecoveringUntilMs = millis() + 2000;
+
+  // Initialize lastOkMs so we don't instantly mark DOWN before first samples
+  unsigned long now = millis();
+  routerStats.lastOkMs = now;
+  linuxStats.lastOkMs  = now;
 }
 
 void loop() {
   unsigned long now = millis();
   bool connected = isWifiConnected();
 
-  // WiFi transition: down -> up
+  // Keep MQTT alive (never blocks)
+  mqttEnsureConnectedNonBlocking(now);
+  mqtt.loop();
+
+  // Detect WiFi transition down->up
   if (!wasWifiConnected && connected) {
     Serial.println("WiFi reconnected -> recovering window");
     wifiRecoveringUntilMs = now + 5000;
   }
   wasWifiConnected = connected;
 
-  // If WiFi is down, try reconnect and show DOWN
+  // If WiFi is down: show DOWN immediately and retry connect occasionally
   if (!connected) {
+    lastState = STATE_DOWN;
     setLeds(STATE_DOWN);
+    digitalWrite(LED_REC, LOW);
+
     lcdLine(0, "WiFi DISCONNECTED");
     lcdLine(1, "ST: DOWN");
 
-    WiFi.disconnect(true);
-    delay(200);
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-    delay(1000);
+    if (now - lastWifiRetryMs > WIFI_RETRY_MS) {
+      lastWifiRetryMs = now;
+      WiFi.disconnect(true);
+      delay(50);
+      WiFi.begin(WIFI_SSID, WIFI_PASS);
+    }
+
+    delay(10);
     return;
   }
 
-  // Ping router + linux
-  pingOnce(ROUTER_IP, routerStats);
-  pingOnce(LINUX_IP,  linuxStats);
+  // === Sampling: run pings/state every 2 seconds ===
+  if (now - lastSampleMs >= SAMPLE_MS) {
+    lastSampleMs = now;
 
-  // Update RTO tracking based on Linux up/down transitions
-  updateLinuxRto(now);
+    // Ping Linux EVERY sample => fast reaction when Linux goes OFF
+    pingOnce(LINUX_IP, linuxStats, now);
 
-  DeviceState s = computeState();
+    // Ping router every other sample (still enough, reduces total blocking)
+    static bool pingRouterToggle = false;
+    pingRouterToggle = !pingRouterToggle;
+    if (pingRouterToggle) {
+      pingOnce(ROUTER_IP, routerStats, now);
+    }
 
-  // ===== Priority 1: Show RTO recovery screen =====
-  if (now < showRtoUntilMs && lastRtoSeconds >= 0) {
-    // Blue blink while showing REC time
+    updateLinuxRto(now);
+
+    bool inRecovering = (now < wifiRecoveringUntilMs);
+    lastRssi = WiFi.RSSI();
+
+    if (now < showRtoUntilMs && lastRtoSeconds >= 0) {
+      lastState = STATE_RECOVERING; // show REC while presenting RTO
+    } else if (inRecovering) {
+      lastState = STATE_RECOVERING;
+    } else {
+      lastState = computeState(now);
+    }
+
+    // Publish (only if MQTT up)
+    if (mqtt.connected()) {
+      String payload = "{";
+      payload += "\"rssi\":" + String(lastRssi) + ",";
+      payload += "\"router_ms\":" + String(routerStats.lastMs) + ",";
+      payload += "\"linux_ms\":" + String(linuxStats.lastMs) + ",";
+      payload += "\"state\":\"" + String(stateToText(lastState)) + "\"";
+      payload += "}";
+      mqtt.publish(MQTT_TOPIC, payload.c_str());
+    }
+
+    // Serial debug (once per sample)
+    Serial.printf("R:%s | L:%s | RSSI:%d | state:%s | mqtt:%s\n",
+                  routerStats.lastOk ? String(routerStats.lastMs).c_str() : "FAIL",
+                  linuxStats.lastOk ? String(linuxStats.lastMs).c_str() : "FAIL",
+                  lastRssi,
+                  stateToText(lastState),
+                  mqtt.connected() ? "UP" : "DOWN");
+  }
+
+  // === LEDs: update continuously (no waiting) ===
+  if (lastState == STATE_RECOVERING) {
+    // Turn off steady LEDs and blink REC
     digitalWrite(LED_OK, LOW);
     digitalWrite(LED_DEG, LOW);
     digitalWrite(LED_DOWN, LOW);
     blinkRecovering();
-
-    lcdLine(0, "Linux RECOVERED");
-    lcdLine(1, "RTO: " + String(lastRtoSeconds) + "s");
-
-    delay(500);
-    return;
-  }
-
-  // ===== Priority 2: WiFi recovering window =====
-  if (now < wifiRecoveringUntilMs) {
-    digitalWrite(LED_OK, LOW);
-    digitalWrite(LED_DEG, LOW);
-    digitalWrite(LED_DOWN, LOW);
-    blinkRecovering();
-    s = STATE_RECOVERING;
   } else {
-    setLeds(s);
     digitalWrite(LED_REC, LOW);
+    setLeds(lastState);
   }
 
-  // LCD normal screen
-  String line0 = "R:";
-  line0 += routerStats.lastOk ? String(routerStats.lastMs) : "F";
-  line0 += " L:";
-  line0 += linuxStats.lastOk ? String(linuxStats.lastMs) : "F";
-  line0 += " ";
-  line0 += stateToText(s);
+  // === LCD: refresh every 500ms using the latest snapshot ===
+  if (now - lastLcdMs >= LCD_MS) {
+    lastLcdMs = now;
 
-  lcdLine(0, line0);
-  lcdLine(1, "RSSI:" + String(WiFi.RSSI()) + " dBm");
+    if (now < showRtoUntilMs && lastRtoSeconds >= 0) {
+      lcdLine(0, "Linux RECOVERED");
+      lcdLine(1, "RTO: " + String(lastRtoSeconds) + "s");
+    } else {
+      String line0 = "R:";
+      line0 += routerStats.lastOk ? String(routerStats.lastMs) : "F";
+      line0 += " L:";
+      line0 += linuxStats.lastOk ? String(linuxStats.lastMs) : "F";
+      line0 += " ";
+      line0 += stateToText(lastState);
 
-  // Serial debug
-  Serial.printf("R:%s (%d fails) | L:%s (%d fails) | RSSI:%d | state:%s\n",
-                routerStats.lastOk ? String(routerStats.lastMs).c_str() : "FAIL",
-                routerStats.consecFails,
-                linuxStats.lastOk ? String(linuxStats.lastMs).c_str() : "FAIL",
-                linuxStats.consecFails,
-                WiFi.RSSI(),
-                stateToText(s));
+      lcdLine(0, line0);
 
-  if (!mqtt.connected()) {
-  connectMqtt();
-}
-mqtt.loop();
+      String mqttTxt = mqtt.connected() ? "MQTT:OK " : "MQTT:DN ";
+      lcdLine(1, mqttTxt + "RSSI:" + String(lastRssi));
+    }
+  }
 
-// Build JSON message
-String payload = "{";
-payload += "\"rssi\":" + String(WiFi.RSSI()) + ",";
-payload += "\"router_ms\":" + String(routerStats.lastMs) + ",";
-payload += "\"linux_ms\":" + String(linuxStats.lastMs) + ",";
-payload += "\"state\":\"" + String(stateToText(s)) + "\"";
-payload += "}";
-
-// Publish
-mqtt.publish(MQTT_TOPIC, payload.c_str());
-
-  delay(2000);
+  delay(10); // keep loop responsive
 }
