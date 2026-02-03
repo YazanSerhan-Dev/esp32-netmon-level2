@@ -13,3 +13,13 @@ code { background: #0f1730; padding: 2px 6px; border-radius: 8px; border: 1px so
 .deg { color: #ffd36b; }
 .down { color: #ff6b6b; }
 .rec { color: #6bc9ff; }
+
+
+.controls { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+.control { background: #121a2b; border: 1px solid #1f2b47; border-radius: 14px; padding: 12px 14px; }
+.control label { display: block; font-size: 12px; color: #9aa7c2; margin-bottom: 6px; }
+.control select { background: #0f1730; color: #e7eaf0; border: 1px solid #1f2b47; border-radius: 10px; padding: 8px 10px; outline: none; }
+.hint-inline { color: #9aa7c2; font-size: 13px; }
+.charts { margin-top: 14px; display: grid; grid-template-columns: 1fr; gap: 12px; }
+.chart-card { background: #121a2b; border: 1px solid #1f2b47; border-radius: 14px; padding: 14px; }
+@media (min-width: 860px) { .charts { grid-template-columns: 1fr 1fr; } }

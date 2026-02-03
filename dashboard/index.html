@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ESP32 NetMon Dashboard</title>
   <link rel="stylesheet" href="styles.css" />
+  <!-- Charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div class="wrap">
@@ -34,8 +36,39 @@
       <span>Last Update (UTC): <b id="ts">-</b></span>
     </div>
 
+    <div class="controls">
+      <div class="control">
+        <label for="window">Graph window</label>
+        <select id="window">
+          <option value="5">Last 5 min</option>
+          <option value="15" selected>Last 15 min</option>
+          <option value="60">Last 60 min</option>
+        </select>
+      </div>
+      <div class="control">
+        <label for="deviceSelect">Device</label>
+        <select id="deviceSelect">
+          <option value="">Auto</option>
+        </select>
+      </div>
+      <div class="control hint-inline">
+        Uses <code>/api/latest</code> and <code>/api/history</code>.
+      </div>
+    </div>
+
+    <div class="charts">
+      <div class="chart-card">
+        <div class="label">RSSI over time</div>
+        <canvas id="chartRssi" height="120"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="label">Latency over time (ms)</div>
+        <canvas id="chartLatency" height="120"></canvas>
+      </div>
+    </div>
+
     <div class="hint">
-      Refreshes every 2 seconds from <code>/api/latest</code>.
+      Tips: If graphs are empty, ensure the server implements <code>/api/history</code> and the collector is writing <code>/var/log/netmon/metrics.log</code>.
     </div>
   </div>
 
