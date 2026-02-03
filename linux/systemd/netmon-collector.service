@@ -1,0 +1,23 @@
+[Unit]
+Description=ESP32 NetMon MQTT Collector
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=netmon
+WorkingDirectory=/opt/netmon
+ExecStart=/opt/netmon/venv/bin/python /opt/netmon/collector.py
+Restart=always
+RestartSec=2
+Environment=MQTT_HOST=127.0.0.1
+Environment=MQTT_PORT=1883
+Environment=MQTT_TOPIC=netmon/+/metrics
+Environment=NETMON_OUT_DIR=/var/log/netmon
+
+# send stdout/stderr to journald (journalctl)
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

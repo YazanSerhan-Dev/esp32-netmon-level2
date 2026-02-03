@@ -1,0 +1,10 @@
+/var/log/netmon/metrics.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0644 netmon netmon
+}
