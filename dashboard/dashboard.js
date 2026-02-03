@@ -6,12 +6,16 @@ let chartRssi;
 let chartLatency;
 
 function fmtTime(isoUtc) {
-  // "2026-02-03T04:12:30Z" -> "04:12:30"
-  if (!isoUtc || typeof isoUtc !== "string") return "";
-  const t = isoUtc.split("T")[1] || "";
-  return t.replace("Z", "").slice(0, 8);
+  if (!isoUtc) return "";
+  const d = new Date(isoUtc);
+  return d.toLocaleTimeString("en-GB", {
+    timeZone: "Asia/Jerusalem",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
+// Auto-scale helper: zoom into data range so small differences are visible
 function autoScale(values, pad = 5) {
   const nums = (values || []).filter(v => Number.isFinite(v));
   if (nums.length < 2) return { min: 0, max: 100 };
@@ -19,8 +23,9 @@ function autoScale(values, pad = 5) {
   let min = Math.min(...nums);
   let max = Math.max(...nums);
 
-  // If data is almost flat, force a visible window
   const span = max - min;
+
+  // If nearly flat data, force a visible window
   if (span < 1) {
     min -= 1;
     max += 1;
@@ -29,9 +34,7 @@ function autoScale(values, pad = 5) {
     max += pad;
   }
 
-  // Safety: don't invert
   if (min > max) [min, max] = [max, min];
-
   return { min, max };
 }
 
@@ -41,6 +44,13 @@ function ensureCharts() {
   const ctxR = document.getElementById("chartRssi");
   const ctxL = document.getElementById("chartLatency");
 
+  const xTicks = {
+    autoSkip: true,
+    maxTicksLimit: 6,
+    maxRotation: 0,
+    minRotation: 0
+  };
+
   chartRssi = new Chart(ctxR, {
     type: "line",
     data: { labels: [], datasets: [{ label: "RSSI (dBm)", data: [], tension: 0.2 }] },
@@ -49,7 +59,7 @@ function ensureCharts() {
       animation: false,
       plugins: { legend: { display: true } },
       scales: {
-        x: { ticks: { maxRotation: 0, autoSkip: true } },
+        x: { ticks: xTicks },
         y: { title: { display: true, text: "dBm" } }
       }
     }
@@ -69,7 +79,8 @@ function ensureCharts() {
       animation: false,
       plugins: { legend: { display: true } },
       scales: {
-        x: { ticks: { maxRotation: 0, autoSkip: true } },
+        x: { ticks: xTicks },
+        // IMPORTANT: do NOT beginAtZero, we want to zoom into real range
         y: { title: { display: true, text: "ms" } }
       }
     }
@@ -146,16 +157,16 @@ async function refreshHistory() {
     const router = (arr || []).map(p => (p.router_ms ?? null));
     const linux = (arr || []).map(p => (p.linux_ms ?? null));
 
-    // Auto-scale latency chart (router+linux together)
+    // ✅ Auto-scale Y axes (zoom)
     const latencyScale = autoScale(router.concat(linux), 5);
     chartLatency.options.scales.y.min = latencyScale.min;
     chartLatency.options.scales.y.max = latencyScale.max;
 
-    // Auto-scale RSSI chart
     const rssiScale = autoScale(rssi, 3);
     chartRssi.options.scales.y.min = rssiScale.min;
     chartRssi.options.scales.y.max = rssiScale.max;
 
+    // Update charts
     chartRssi.data.labels = labels;
     chartRssi.data.datasets[0].data = rssi;
     chartRssi.update();
