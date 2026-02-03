@@ -1,0 +1,15 @@
+body { font-family: Arial, sans-serif; background: #0b0f19; color: #e7eaf0; margin: 0; }
+.wrap { max-width: 900px; margin: 40px auto; padding: 0 16px; }
+h1 { margin: 0 0 18px; font-size: 28px; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.card { background: #121a2b; border: 1px solid #1f2b47; border-radius: 14px; padding: 16px; }
+.label { color: #9aa7c2; font-size: 13px; margin-bottom: 10px; }
+.value { font-size: 30px; font-weight: 700; }
+.footer { margin-top: 16px; display: flex; gap: 18px; color: #b9c3d9; }
+.hint { margin-top: 10px; color: #9aa7c2; font-size: 13px; }
+code { background: #0f1730; padding: 2px 6px; border-radius: 8px; border: 1px solid #1f2b47; }
+@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+.ok { color: #67f08a; }
+.deg { color: #ffd36b; }
+.down { color: #ff6b6b; }
+.rec { color: #6bc9ff; }
