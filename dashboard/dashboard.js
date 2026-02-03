@@ -12,6 +12,29 @@ function fmtTime(isoUtc) {
   return t.replace("Z", "").slice(0, 8);
 }
 
+function autoScale(values, pad = 5) {
+  const nums = (values || []).filter(v => Number.isFinite(v));
+  if (nums.length < 2) return { min: 0, max: 100 };
+
+  let min = Math.min(...nums);
+  let max = Math.max(...nums);
+
+  // If data is almost flat, force a visible window
+  const span = max - min;
+  if (span < 1) {
+    min -= 1;
+    max += 1;
+  } else {
+    min -= pad;
+    max += pad;
+  }
+
+  // Safety: don't invert
+  if (min > max) [min, max] = [max, min];
+
+  return { min, max };
+}
+
 function ensureCharts() {
   if (chartRssi && chartLatency) return;
 
@@ -47,7 +70,7 @@ function ensureCharts() {
       plugins: { legend: { display: true } },
       scales: {
         x: { ticks: { maxRotation: 0, autoSkip: true } },
-        y: { title: { display: true, text: "ms" }, beginAtZero: true }
+        y: { title: { display: true, text: "ms" } }
       }
     }
   });
@@ -122,6 +145,16 @@ async function refreshHistory() {
     const rssi = (arr || []).map(p => (p.rssi ?? null));
     const router = (arr || []).map(p => (p.router_ms ?? null));
     const linux = (arr || []).map(p => (p.linux_ms ?? null));
+
+    // Auto-scale latency chart (router+linux together)
+    const latencyScale = autoScale(router.concat(linux), 5);
+    chartLatency.options.scales.y.min = latencyScale.min;
+    chartLatency.options.scales.y.max = latencyScale.max;
+
+    // Auto-scale RSSI chart
+    const rssiScale = autoScale(rssi, 3);
+    chartRssi.options.scales.y.min = rssiScale.min;
+    chartRssi.options.scales.y.max = rssiScale.max;
 
     chartRssi.data.labels = labels;
     chartRssi.data.datasets[0].data = rssi;
