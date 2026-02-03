@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ESP32 NetMon Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <h1>ESP32 NetMon Dashboard</h1>
+
+    <div class="grid">
+      <div class="card">
+        <div class="label">State</div>
+        <div id="state" class="value">-</div>
+      </div>
+      <div class="card">
+        <div class="label">RSSI (dBm)</div>
+        <div id="rssi" class="value">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Router Latency (ms)</div>
+        <div id="router" class="value">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Linux Latency (ms)</div>
+        <div id="linux" class="value">-</div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span>Device: <b id="device">-</b></span>
+      <span>Last Update (UTC): <b id="ts">-</b></span>
+    </div>
+
+    <div class="hint">
+      Refreshes every 2 seconds from <code>/api/latest</code>.
+    </div>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
