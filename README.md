@@ -26,6 +26,8 @@ Linux Collector (Python + systemd)
 Web Dashboard (Graphs)
 ```
 
+**Deployment note:** You can run the backend either **natively on Linux (systemd)** or via **Docker Compose** (recommended for quick setup). Mosquitto can be native or containerized.
+
 ---
 
 ## Features
@@ -121,19 +123,59 @@ Linux being down **never causes DOWN by itself**.
 
 ---
 
+## Quick Start (Docker Compose – Option A)
+
+This mode runs **collector + web** in Docker, while Mosquitto runs on the **host Linux** (so you avoid port conflicts and keep it simple).
+
+### 0) Prereqs on Linux
+- Docker + docker-compose (or `docker compose` plugin)
+- Mosquitto broker running on the host (port **1883**)
+
+### 1) Start the stack
+From the repo root:
+
+```bash
+docker-compose down --remove-orphans
+docker-compose up -d --build
+docker ps
+```
+
+### 2) Open the dashboard
+- `http://localhost:8080`
+
+### 3) Where data is stored
+Docker volume `netmon_data` is mounted into both containers at `/data`:
+- `/data/latest.json`
+- `/data/metrics.log`
+
+---
+
+## Native Linux Mode (systemd)
+
+If you prefer the "production-like" setup:
+- Mosquitto runs as a Linux service
+- `server/collector.py` runs as a **systemd service**
+- Web server runs either as a service or manually
+
+See the `linux/` folder for service files and deployment notes.
+
+---
+
+## API Endpoints
+
+- `GET /api/latest` → latest snapshot (`latest.json`)
+- `GET /api/history?n=450&device=esp32-1` → last N samples parsed from `metrics.log`
+
+---
+
+---
+
 ## Engineering Principles
 - Non-blocking embedded design
 - Time-based state detection (not failure counters)
 - Clear separation between runtime data and source code
 - Linux-standard filesystem layout
 - Production-style logging and service management
-
----
-
-## Security Notes
-- WiFi credentials are stored in a local `secrets.h` file on the ESP32
-- Secrets are **not committed** to GitHub
-- Logs and runtime data are not version-controlled
 
 ---
 
@@ -146,7 +188,8 @@ Linux being down **never causes DOWN by itself**.
 ---
 
 ## Future Improvements
-- Multi-device dashboard support
+- Containerized Mosquitto (Option B)
+- Better multi-device UX in dashboard (auto-discovery)
 - Persistent database storage (SQLite)
 - Alerts and notifications
 - Authentication for dashboard access
