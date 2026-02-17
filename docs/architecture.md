@@ -2,7 +2,7 @@
 
 ## 1. Overview
 ESP32 NetMon is a small distributed monitoring system that measures network health using an ESP32 device and a Linux-based backend.
-The project demonstrates real-world concepts from embedded systems, networking, Linux services, logging, and system observability.
+The project demonstrates real-world concepts from embedded systems, networking, Linux services, logging, containerization (Docker), and basic system observability.
 
 The system is intentionally split into clear layers to reflect how production monitoring systems are built.
 
@@ -10,12 +10,13 @@ The system is intentionally split into clear layers to reflect how production mo
 
 ## 2. High-Level Architecture
 
-The system consists of four main layers:
+The system consists of five main layers:
 
 1. Embedded device layer (ESP32)
 2. Network and messaging layer (WiFi + MQTT)
-3. Linux backend layer (MQTT broker + collector service)
-4. Persistence and observability layer (logs and state files)
+3. Linux messaging layer (Mosquitto broker)
+4. Backend + API layer (collector + web API + dashboard)
+5. Persistence and observability layer (logs and state files)
 
 ---
 
@@ -45,13 +46,13 @@ The system consists of four main layers:
 - MQTT (publish/subscribe messaging)
 
 ### MQTT Topics
-ESP32 devices publish metrics to the following topic structure:
+The ESP32 publishes metrics to a single-device topic:
 
 ```
-netmon/<device-id>/metrics
+netmon/esp32-1/metrics
 ```
 
-This design allows multiple devices to be monitored simultaneously.
+> Note: The topic naming style is compatible with multi-device expansion, but the current project deployment targets a single ESP32 device.
 
 ### Data Format
 Messages are sent as JSON objects containing:
@@ -62,24 +63,39 @@ Messages are sent as JSON objects containing:
 
 ---
 
-## 5. Linux Backend Layer
+## 5. Linux Messaging Layer (MQTT Broker)
 
 ### MQTT Broker
 - Mosquitto MQTT broker runs on the Linux machine
-- Receives messages from ESP32 devices
-- Distributes messages to subscribers
-
-### Collector Service
-- Implemented in Python (`collector.py`)
-- Runs as a `systemd` service
-- Subscribes to `netmon/+/metrics`
-- Parses incoming JSON messages
-- Maintains the latest known device state
-- Writes structured logs to disk
+- Receives messages from the ESP32
+- Distributes messages to subscribers (collector)
 
 ---
 
-## 6. Persistence & Logging
+## 6. Backend + API Layer
+
+### Collector Service
+- Implemented in Python (`collector.py`)
+- Subscribes to:
+
+```
+netmon/esp32-1/metrics
+```
+
+- Parses incoming JSON messages
+- Maintains the latest known device state
+- Writes structured logs and state snapshots to disk
+
+### Web/API Service + Dashboard
+- Implemented in Python (`app.py`) using Flask
+- Exposes REST endpoints used by the dashboard:
+  - `GET /api/latest` – latest state snapshot
+  - `GET /api/history?n=<N>` – last N samples parsed from `metrics.log`
+- Serves the web dashboard (static files) from `/` for live visualization (graphs + current status)
+
+---
+
+## 7. Persistence & Logging
 
 ### Log Files
 - Metrics are written to:
@@ -102,29 +118,37 @@ Messages are sent as JSON objects containing:
 
 ---
 
-## 7. Deployment Model
+## 8. Deployment Model
 
-- ESP32 firmware is built and flashed using PlatformIO
-- Linux services are installed under `/opt/netmon`
-- The collector runs as a managed `systemd` service
+ESP32:
+- Firmware is built and flashed using PlatformIO
+
+Linux (current deployment):
+- Mosquitto runs on the Linux host (system service)
+- Collector + Web/API + Dashboard run using Docker Compose:
+  - `netmon-collector` container (Python MQTT subscriber)
+  - `netmon-web` container (Flask API + dashboard)
+- Containers share a Docker volume for runtime data (logs/state)
 - GitHub stores source code and configuration only
 - Runtime data (logs, state files) remain local to the Linux system
 
+> Alternative mode: the collector can also run as a managed `systemd` service (used earlier in the project). The Docker deployment is the preferred “one-command” runtime.
+
 ---
 
-## 8. Design Goals
+## 9. Design Goals
 
 - Clear separation between embedded, network, and backend layers
-- Real-world Linux filesystem and service layout
-- Fault tolerance via service supervision and log rotation
-- Extensible design supporting multiple devices and dashboards
+- Real-world Linux filesystem layout for observability data
+- Fault tolerance via service supervision / container restart policies and log rotation
+- Simple, single-device deployment that still leaves room for future scaling
+- Live visualization through an HTTP dashboard backed by real collected metrics
 
 ---
 
-## 9. Future Extensions
+## 10. Future Extensions
 
-- Web-based dashboard for live visualization
-- Threshold-based alerts
-- Support for multiple ESP32 devices
-- Persistent database storage for historical analysis
-
+- Threshold-based alerts (e.g., notify if DOWN persists > X seconds)
+- Multi-device support (topic wildcards + per-device storage)
+- Persistent database storage for historical analysis (SQLite/PostgreSQL)
+- Hardened MQTT security (authentication/ACLs + TLS)
