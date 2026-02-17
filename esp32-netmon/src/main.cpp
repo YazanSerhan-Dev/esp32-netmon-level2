@@ -10,7 +10,7 @@ const char* WIFI_SSID = "ChangeME";
 const char* WIFI_PASS = "ChangeME";
 
 // ===== MQTT CONFIG =====
-const char* MQTT_HOST  = "192.168.33.13";
+const char* MQTT_HOST  = "ChangeME";
 const int   MQTT_PORT  = 1883;
 const char* MQTT_TOPIC = "netmon/esp32-1/metrics";
 
