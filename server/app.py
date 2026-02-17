@@ -9,7 +9,14 @@ LOG_DIR = os.getenv("NETMON_OUT_DIR", "/var/log/netmon")
 LATEST_FILE = os.path.join(LOG_DIR, "latest.json")
 LOG_FILE = os.path.join(LOG_DIR, "metrics.log")
 
-app = Flask(__name__, static_folder="../dashboard", static_url_path="")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DASHBOARD_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "dashboard"))
+if not os.path.exists(DASHBOARD_DIR):
+  # Docker case: dashboard copied into /app/dashboard
+  DASHBOARD_DIR = os.path.join(BASE_DIR, "dashboard")
+
+app = Flask(__name__, static_folder="/app/dashboard", static_url_path="")
+
 
 LINE_RE = re.compile(
     r'^(?P<ts>\S+)\s+device=(?P<device>\S+)\s+rssi=(?P<rssi>[^\s]+)\s+router_ms=(?P<router_ms>[^\s]+)\s+linux_ms=(?P<linux_ms>[^\s]+)\s+state=(?P<state>\S+)'
